@@ -1,0 +1,33 @@
+{
+  "platne_od": "2026-01-01",
+  "zakladna_nahrada": {
+    "osobne_auto": 0.313,
+    "motocykel": 0.09
+  },
+  "ceny_phm": {
+    "benzin": 1.70,
+    "diesel": 1.63,
+    "lpg": 0.87,
+    "cng": 1.30,
+    "elektrina": 0.25
+  },
+  "jednotky_phm": {
+    "benzin": "EUR/l",
+    "diesel": "EUR/l",
+    "lpg": "EUR/l",
+    "cng": "EUR/kg",
+    "elektrina": "EUR/kWh"
+  },
+  "stravne_sk": {
+    "pasmo_5_12": 9.30,
+    "pasmo_12_18": 13.80,
+    "pasmo_nad_18": 20.60
+  },
+  "kratenie_jedal": {
+    "ranajky": 0.25,
+    "obed": 0.40,
+    "vecera": 0.35
+  },
+  "kurz_czk_eur": 24.231,
+  "vreckove_max_percent": 40
+}
