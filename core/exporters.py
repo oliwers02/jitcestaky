@@ -209,18 +209,36 @@ def export_xml(trips: list[dict], business_trips: list[dict],
 
 # -------------------------------------------------------------------- PDF ---
 
+# Font priložený v repozitári má prednosť — Unicode (diakritika) funguje
+# na každej platforme vrátane Streamlit Cloud, kde systémové fonty nemusia byť.
+_BUNDLED_FONTS = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 _FONT_CANDIDATES = [
-    ("C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/arialbd.ttf"),
+    (str(_BUNDLED_FONTS / "DejaVuSans.ttf"),
+     str(_BUNDLED_FONTS / "DejaVuSans-Bold.ttf")),
     ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
      "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+    ("C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/arialbd.ttf"),
     ("/System/Library/Fonts/Supplemental/Arial.ttf",
      "/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
 ]
 
+# Náhrady bežných „nelatin-1" znakov pre prípad fallbacku na core font.
+_ASCII_MAP = {
+    "—": "-", "–": "-", "‑": "-", "−": "-",
+    "“": '"', "”": '"', "„": '"', "‟": '"', "’": "'", "‘": "'",
+    "…": "...", "€": "EUR", "→": "->", "×": "x", "•": "-", "\xa0": " ",
+}
 
-def _strip_diacritics(text: str) -> str:
-    return "".join(c for c in unicodedata.normalize("NFKD", str(text))
-                   if not unicodedata.combining(c))
+
+def _ascii_fallback(text: str) -> str:
+    """Bezpečný prepis do latin-1 pre prípad, že nie je Unicode font.
+    Odstráni diakritiku, prepíše pomlčky/úvodzovky/€ a zvyšok nahradí '?'."""
+    s = str(text)
+    for src, dst in _ASCII_MAP.items():
+        s = s.replace(src, dst)
+    s = "".join(c for c in unicodedata.normalize("NFKD", s)
+                if not unicodedata.combining(c))
+    return s.encode("latin-1", "replace").decode("latin-1")
 
 
 class _PDF(FPDF):
@@ -239,7 +257,7 @@ class _PDF(FPDF):
         self.family = "App" if self.unicode_ok else "helvetica"
 
     def t(self, text: str) -> str:
-        return str(text) if self.unicode_ok else _strip_diacritics(text)
+        return str(text) if self.unicode_ok else _ascii_fallback(text)
 
     def h1(self, text: str):
         self.set_font(self.family, "B", 15)
