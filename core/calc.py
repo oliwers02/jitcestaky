@@ -284,6 +284,83 @@ def suhrn_viacdnovej(bt: dict, dni: list[dict]) -> dict:
     }
 
 
+# --------------------------------------------- súhrnné súčty (bez duplicity) --
+
+def _trip_stravne_eur(t: dict) -> float:
+    """Stravné jednodňovej cesty prepočítané na EUR (0, ak sa nedá prepočítať)."""
+    mena = t.get("stravne_mena") or "EUR"
+    val = float(t.get("vypocitane_stravne") or 0)
+    eur = prepocet_na_eur(val, mena, get_rates(t.get("datum")))
+    return eur or 0.0
+
+
+def covered_days(business_trips: list[dict]) -> set[tuple]:
+    """Množina (employee_id, 'YYYY-MM-DD') pokrytá viacdňovými cestami.
+
+    Slúži na to, aby sa stravné dňa, ktorý spadá do viacdňovej cesty,
+    NEzapočítalo aj z jednodňovej cesty (zabráni duplicite Cesty × Diéty)."""
+    from core import db
+    s = set()
+    for bt in business_trips:
+        dni = db.fetch_all("business_trip_days", "business_trip_id = ?",
+                           (bt["id"],))
+        for d in dni:
+            s.add((bt.get("employee_id"), str(d["datum"])))
+    return s
+
+
+def compute_totals(trips: list[dict], business_trips: list[dict]) -> dict:
+    """Konzistentné súčty za obdobie podľa zákona č. 283/2002 Z. z.
+
+    Pravidlo (kľúčové): stravné viacdňovej cesty žije VÝHRADNE v denných
+    diétach; stravné jednodňovej cesty žije v hárku Cesty. Ak jednodňová
+    cesta spadá do dňa pokrytého viacdňovou cestou, jej stravné sa do súčtu
+    NEzapočíta (je už v diétach).
+
+    Náhrada za auto (PHM + základná náhrada za km) sa NEMENÍ — len sčíta.
+    """
+    from core import db
+    cov = covered_days(business_trips)
+
+    auto = vedlajsie = stravne_jd = 0.0
+    overlap_trip_ids = []
+    for t in trips:
+        auto += (float(t.get("vypocitana_phm_nahrada") or 0)
+                 + float(t.get("vypocitana_zakladna_nahrada") or 0))
+        vedlajsie += float(t.get("vedlajsie_vydavky_eur") or 0)
+        if (t.get("employee_id"), str(t.get("datum"))) in cov:
+            overlap_trip_ids.append(t.get("id"))  # stravné je v diétach
+        else:
+            stravne_jd += _trip_stravne_eur(t)
+
+    bt_km = bt_stravne = bt_ostatne = 0.0
+    for bt in business_trips:
+        dni = db.fetch_all("business_trip_days", "business_trip_id = ?",
+                           (bt["id"],), order="datum")
+        s = suhrn_viacdnovej(bt, dni)
+        bt_km += float(bt.get("kilometrovne_eur") or 0)
+        bt_stravne += s.get("stravne_eur") or 0.0  # diéty v EUR
+        bt_ostatne += (float(bt.get("ubytovanie_eur") or 0)
+                       + float(bt.get("navstevy_rodiny_eur") or 0))
+
+    auto = round(auto + bt_km, 2)
+    stravne_jd = round(stravne_jd, 2)
+    stravne_vd = round(bt_stravne, 2)
+    stravne_spolu = round(stravne_jd + stravne_vd, 2)
+    ostatne = round(vedlajsie + bt_ostatne, 2)
+    celkom = round(auto + stravne_spolu + ostatne, 2)
+    return {
+        "auto": auto,
+        "stravne_jednodnove": stravne_jd,
+        "stravne_viacdnove": stravne_vd,
+        "stravne_spolu": stravne_spolu,
+        "ostatne": ostatne,
+        "celkom": celkom,
+        "overlap_trip_ids": overlap_trip_ids,
+        "covered_days": cov,
+    }
+
+
 # ------------------------------------------------------------- haversine ----
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

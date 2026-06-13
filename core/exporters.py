@@ -33,10 +33,20 @@ CESTY_STLPCE = [
 ]
 
 
-def trips_to_df(trips: list[dict]) -> pd.DataFrame:
-    """Jednodňové cesty -> DataFrame so slovenskými stĺpcami pre export."""
+def trips_to_df(trips: list[dict], covered_days: set | None = None) -> pd.DataFrame:
+    """Jednodňové cesty -> DataFrame so slovenskými stĺpcami pre export.
+
+    Ak je dátum jednodňovej cesty pokrytý viacdňovou cestou (covered_days),
+    jej stravné sa do hárku Cesty NEdoplní (=0) a o túto sumu sa zníži „Spolu",
+    aby sa stravné nezdvojilo s hárkom Diéty (žije len v diétach).
+    """
+    covered_days = covered_days or set()
     rows = []
     for t in trips:
+        v_multidni = (t.get("employee_id"), str(t.get("datum"))) in covered_days
+        stravne = 0.0 if v_multidni else float(t.get("vypocitane_stravne") or 0)
+        stravne_orig_eur = calc._trip_stravne_eur(t) if v_multidni else 0.0
+        spolu = round(float(t.get("nahrada_spolu") or 0) - stravne_orig_eur, 2)
         rows.append({
             "Dátum": t.get("datum", ""),
             "Zamestnanec": t.get("zamestnanec", ""),
@@ -48,11 +58,12 @@ def trips_to_df(trips: list[dict]) -> pd.DataFrame:
             "Km": float(t.get("vzdialenost_km") or 0),
             "PHM náhrada (EUR)": float(t.get("vypocitana_phm_nahrada") or 0),
             "Základná náhrada (EUR)": float(t.get("vypocitana_zakladna_nahrada") or 0),
-            "Stravné": float(t.get("vypocitane_stravne") or 0),
+            "Stravné": stravne,
             "Mena stravného": t.get("stravne_mena", "EUR"),
+            "Stravné v rámci viacdňovej": "áno (v Diétach)" if v_multidni else "—",
             "Vreckové": float(t.get("vypocitane_vreckove") or 0),
             "Vedľajšie výdavky (EUR)": float(t.get("vedlajsie_vydavky_eur") or 0),
-            "Spolu (EUR)": float(t.get("nahrada_spolu") or 0),
+            "Spolu (EUR)": spolu,
         })
     return pd.DataFrame(rows)
 
@@ -222,6 +233,9 @@ _FONT_CANDIDATES = [
      "/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
 ]
 
+# Podpisový obrázok priložený v repozitári (ak existuje, vloží sa do PDF).
+_SIGNATURE = Path(__file__).resolve().parent.parent / "assets" / "signatures" / "podpis.png"
+
 # Náhrady bežných „nelatin-1" znakov pre prípad fallbacku na core font.
 _ASCII_MAP = {
     "—": "-", "–": "-", "‑": "-", "−": "-",
@@ -316,18 +330,43 @@ def _hlavicka(pdf: _PDF, profil: dict):
     pdf.ln(4)
 
 
-def _podpisy(pdf: _PDF):
-    pdf.ln(14)
+def _format_datum(datum) -> str:
+    """ISO 'YYYY-MM-DD' -> 'DD.MM.YYYY' (deň podpisu na dokumente)."""
+    try:
+        return dt.date.fromisoformat(str(datum)).strftime("%d.%m.%Y")
+    except (ValueError, TypeError):
+        return str(datum or "")
+
+
+def _podpisy(pdf: _PDF, datum=None):
+    """Podpisové bloky pre obe strany. Ak existuje podpisový obrázok, vloží sa
+    nad obe čiary; dátum (deň, kedy sa má dokument podpísať podľa zákona) sa
+    doplní pod oba popisy."""
+    pdf.ln(18)
     y = pdf.get_y()
-    if y > 255:
+    if y > 245:
         pdf.add_page()
-        y = pdf.get_y() + 10
-    pdf.set_font(pdf.family, "", 9)
+        y = pdf.get_y() + 12
+    # podpisový obrázok tesne nad čiarou (vľavo aj vpravo)
+    if _SIGNATURE.exists():
+        w = 46.0
+        h = w * 74 / 293  # pomer orezaného podpisu
+        pdf.image(str(_SIGNATURE), x=55 - w / 2, y=y - h - 0.5, w=w)
+        pdf.image(str(_SIGNATURE), x=155 - w / 2, y=y - h - 0.5, w=w)
+    pdf.set_draw_color(0, 0, 0)
     pdf.line(25, y, 85, y)
     pdf.line(125, y, 185, y)
     pdf.set_y(y + 1)
+    pdf.set_font(pdf.family, "", 9)
     pdf.cell(90, 5, pdf.t("podpis zamestnanca"), align="C")
-    pdf.cell(0, 5, pdf.t("podpis schvaľujúceho"), align="C")
+    pdf.cell(0, 5, pdf.t("podpis schvaľujúceho"),
+             new_x="LMARGIN", new_y="NEXT", align="C")
+    if datum:
+        pdf.set_font(pdf.family, "", 8.5)
+        d = _format_datum(datum)
+        pdf.cell(90, 5, pdf.t(f"Dátum: {d}"), align="C")
+        pdf.cell(0, 5, pdf.t(f"Dátum: {d}"),
+                 new_x="LMARGIN", new_y="NEXT", align="C")
 
 
 def pdf_cestovny_prikaz(bt: dict, zamestnanec: dict, profil: dict) -> bytes:
@@ -361,7 +400,8 @@ def pdf_cestovny_prikaz(bt: dict, zamestnanec: dict, profil: dict) -> bytes:
         "Zamestnancovi patrí náhrada preukázaných cestovných výdavkov, výdavkov za "
         "ubytovanie, stravné a náhrada preukázaných potrebných vedľajších výdavkov "
         "podľa zákona č. 283/2002 Z. z."))
-    _podpisy(pdf)
+    # cestovný príkaz sa vystavuje a podpisuje pred nástupom na cestu
+    _podpisy(pdf, datum=bt.get("datum_zaciatku"))
     return bytes(pdf.output())
 
 
@@ -413,7 +453,8 @@ def pdf_vyuctovanie(bt: dict, zamestnanec: dict, profil: dict,
         rk.append(["SPOLU", f"{suhrn['ostatne_eur']:.2f} EUR + {suhrn['stravne']:.2f} {mena}"
                             " (kurz CZK/EUR nie je zadaný v Nastaveniach)"])
     pdf.table(["Položka", "Suma"], rk, [110, 64])
-    _podpisy(pdf)
+    # vyúčtovanie sa podpisuje po skončení cesty (deň návratu)
+    _podpisy(pdf, datum=bt.get("datum_konca"))
     return bytes(pdf.output())
 
 

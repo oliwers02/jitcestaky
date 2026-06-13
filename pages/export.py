@@ -59,22 +59,25 @@ if "Viacdňové" in typ_ciest:
     for b in bts:
         b["zamestnanec"] = emps.get(b["employee_id"], {}).get("meno_priezvisko", "")
 
-trips_df = exporters.trips_to_df(trips)
+# Konzistentné súčty bez duplicity stravného (stravné viacdňovej cesty
+# žije len v Diétach; jednodňová cesta v deň pokrytý viacdňovou ho nemá).
+totals = calc.compute_totals(trips, bts)
+trips_df = exporters.trips_to_df(trips, totals["covered_days"])
 diety_df = exporters.diety_to_df(bts)
 
 # ---------------------------------------------------------------- náhľad ----
 st.divider()
 spolu_km = sum(float(t["vzdialenost_km"] or 0) for t in trips)
-spolu_eur = sum(float(t["nahrada_spolu"] or 0) for t in trips)
-bt_naklady = sum(float(b["ubytovanie_eur"] or 0) + float(b["kilometrovne_eur"] or 0)
-                 + float(b["navstevy_rodiny_eur"] or 0) for b in bts)
-stravne_bt = round(float(diety_df["Stravné"].sum()) if not diety_df.empty else 0, 2)
 
 k1, k2, k3, k4 = st.columns(4)
-k1.metric("Jednodňové cesty", len(trips))
-k2.metric("Viacdňové cesty", len(bts))
-k3.metric("Kilometre", f"{spolu_km:,.0f} km".replace(",", " "))
-k4.metric("Náhrady (jednodňové)", ui.eur(spolu_eur))
+k1.metric("Jednodňové / viacdňové", f"{len(trips)} / {len(bts)}")
+k2.metric("Náhrada za auto (PHM + km)", ui.eur(totals["auto"]))
+k3.metric("Stravné spolu", ui.eur(totals["stravne_spolu"]))
+k4.metric("CELKOM náhrady", ui.eur(totals["celkom"]))
+if totals["overlap_trip_ids"]:
+    st.caption(f"ℹ️ {len(totals['overlap_trip_ids'])} jednodňových ciest spadá "
+               "do viacdňovej cesty — ich stravné je rátané len v Diétach "
+               "(v hárku Cesty je pri nich 0, aby nevznikla duplicita).")
 
 if trips:
     st.dataframe(trips_df, hide_index=True, width="stretch")
@@ -96,9 +99,12 @@ suhrn = {
     "Počet jednodňových ciest": len(trips),
     "Počet viacdňových ciest": len(bts),
     "Najazdené km": round(spolu_km, 1),
-    "Náhrady jednodňové (EUR)": round(spolu_eur, 2),
-    "Náklady viacdňové bez stravného (EUR)": round(bt_naklady, 2),
-    "Stravné viacdňové (v mene krajiny)": stravne_bt,
+    "Náhrada za auto (PHM + základná náhrada za km) (EUR)": totals["auto"],
+    "Stravné jednodňové (EUR)": totals["stravne_jednodnove"],
+    "Stravné viacdňové – diéty (EUR)": totals["stravne_viacdnove"],
+    "Stravné spolu (EUR)": totals["stravne_spolu"],
+    "Ubytovanie + iné výdavky (EUR)": totals["ostatne"],
+    "CELKOM cestovné náhrady (EUR)": totals["celkom"],
     "Vygenerované": dt.date.today().isoformat(),
 }
 profil = ui.get_profil()
