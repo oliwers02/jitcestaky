@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 data/cestaky.db
 .venv/
+.streamlit/secrets.toml
+cestaky_import_2026.json

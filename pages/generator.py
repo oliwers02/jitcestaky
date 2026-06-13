@@ -4,7 +4,7 @@ import datetime as dt
 import pandas as pd
 import streamlit as st
 
-from core import calc, db, holidays_sk, ui
+from core import calc, cloud_sync, db, holidays_sk, ui
 
 st.title("⚙️ Generátor ciest")
 st.caption("Hromadne vytvorí jednodňové cesty za zvolené obdobie podľa "
@@ -88,6 +88,7 @@ if st.button("🚀 Vygenerovať cesty", type="primary",
 
         vytvorene = 0
         spolu = 0.0
+        db.suspend_change(True)  # počas hromadného vkladania nezálohuj po každej ceste
         for den, idx in zip(dni, rozpis):
             t = trasy[idx]
             ciel = str(t["Cieľ"])
@@ -110,6 +111,9 @@ if st.button("🚀 Vygenerovať cesty", type="primary",
             db.insert("trips", data)
             vytvorene += 1
             spolu += data["nahrada_spolu"]
+        db.suspend_change(False)
+        if cloud_sync.enabled():
+            cloud_sync.push()  # jedna spoločná záloha po celom generovaní
         st.success(f"✅ Vygenerovaných {vytvorene} ciest, náhrady spolu {ui.eur(spolu)}. "
                    "Nájdete ich na stránke Cesty.")
         ui.panel_pouzite_sadzby(dni[0].isoformat(), calc.get_rates(dni[0]))

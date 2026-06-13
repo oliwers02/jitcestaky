@@ -6,12 +6,14 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from core import calc, db, ui
+from core import calc, cloud_sync, db, ui
 
 st.title("🛠️ Nastavenia")
 
-tab_sadzby, tab_diety, tab_profil, tab_vzhlad, tab_zaloha = st.tabs(
-    ["💶 Sadzby", "🍽️ Diéty SK/CZ/AT", "🏢 Osobné údaje", "🎨 Vzhľad", "💾 Záloha dát"])
+(tab_sadzby, tab_diety, tab_profil, tab_vzhlad,
+ tab_cloud, tab_zaloha) = st.tabs(
+    ["💶 Sadzby", "🍽️ Diéty SK/CZ/AT", "🏢 Osobné údaje", "🎨 Vzhľad",
+     "☁️ Cloud sync", "💾 Záloha dát"])
 
 # ---------------------------------------------------------------- sadzby ----
 with tab_sadzby:
@@ -132,11 +134,68 @@ with tab_vzhlad:
         st.success("Téma uložená — obnovte stránku v prehliadači (F5), "
                    "aby sa zmena prejavila.")
 
+# ------------------------------------------------------------ cloud sync ----
+with tab_cloud:
+    st.subheader("Automatická záloha do GitHub Gistu")
+    st.write(cloud_sync.status_text())
+    if cloud_sync.enabled():
+        st.success("Sync je zapnutý. Po každej zmene sa dáta automaticky uložia "
+                   "do súkromného gistu a pri otvorení appky sa načítajú späť. "
+                   "Gist nereštartuje appku.")
+        c1, c2 = st.columns(2)
+        if c1.button("⬆️ Zálohovať teraz do cloudu", width="stretch"):
+            st.success("Záloha uložená.") if cloud_sync.push() else \
+                st.error(st.session_state.get("_sync_error") or "Zlyhalo.")
+        if c2.button("⬇️ Načítať z cloudu (prepíše dáta)", width="stretch"):
+            if cloud_sync.pull():
+                st.success("Dáta načítané z cloudu.")
+                st.rerun()
+            else:
+                st.warning("V cloude zatiaľ nie sú žiadne dáta "
+                           "(alebo nastala chyba).")
+        gid = st.session_state.get("_gist_id")
+        if gid:
+            st.caption(f"Gist: https://gist.github.com/{gid}")
+    else:
+        st.info("Sync je **vypnutý**. Zapnete ho pridaním tokenu do Streamlit "
+                "secrets — potom appka prežije reštart bez straty dát.")
+        st.markdown(
+            "**Postup (jednorazovo, ~3 min):**\n"
+            "1. GitHub → *Settings → Developer settings → Personal access "
+            "tokens → Fine-grained tokens → Generate new token*.\n"
+            "2. V sekcii **Account permissions → Gists** nastavte "
+            "**Read and write**. Token skopírujte (začína `github_pat_…`).\n"
+            "3. V Streamlit Cloude: *App → ⋮ → Settings → Secrets* a vložte:\n"
+            "   ```toml\n"
+            '   github_token = "github_pat_VAS_TOKEN"\n'
+            "   ```\n"
+            "4. Uložte secrets — appka sa reštartuje a sync sa zapne. Gist na "
+            "zálohu sa vytvorí automaticky.\n\n"
+            "Potom stačí raz nahrať dáta (napr. cez *Záloha dát → Obnoviť zo "
+            "zálohy*) a od tej chvíle sa všetko ukladá samo.")
+        st.caption("Token sa ukladá iba do Streamlit secrets (na server), "
+                   "nikdy sa nezobrazuje v prehliadači. Odporúčame fine-grained "
+                   "token obmedzený len na oprávnenie Gists.")
+
 # ---------------------------------------------------------------- záloha ----
 with tab_zaloha:
-    st.warning("⚠️ **Streamlit Community Cloud má dočasné úložisko** — pri "
-               "reštarte alebo novom nasadení appky sa SQLite databáza resetuje. "
-               "Pravidelne si stiahnite zálohu a po reštarte ju obnovte.")
+    if cloud_sync.enabled():
+        st.info("ℹ️ Máte zapnutý **cloud sync** — dáta sa zálohujú automaticky. "
+                "Manuálna záloha nižšie je doplnková (napr. na archiváciu).")
+    else:
+        st.warning("⚠️ **Streamlit Community Cloud má dočasné úložisko** — pri "
+                   "reštarte sa SQLite databáza resetuje. Zapnite **Cloud sync** "
+                   "(predošlá záložka), alebo si pravidelne sťahujte zálohu "
+                   "a po reštarte ju obnovte.")
+
+    st.divider()
+    if db.is_empty():
+        if st.button("🧪 Načítať ukážkové dáta (1 zamestnanec, vozidlo, "
+                     "ukážkové cesty)"):
+            db.seed_sample_data()
+            st.success("Ukážkové dáta načítané.")
+            st.rerun()
+        st.divider()
     st.download_button(
         "⬇️ Stiahnuť zálohu celej databázy (JSON)",
         db.export_db_json().encode("utf-8"),

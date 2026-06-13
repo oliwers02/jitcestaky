@@ -11,6 +11,26 @@ DB_PATH = DATA_DIR / "cestaky.db"
 RATES_JSON = DATA_DIR / "rates_2026.json"
 PER_DIEMS_CSV = DATA_DIR / "per_diems_2026.csv"
 
+# Voliteľný hook volaný po každej zmene dát (insert/update/delete).
+# Appková vrstva ho nastaví na cloudovú zálohu (core.cloud_sync.push).
+# Jadro DB tým neimportuje streamlit ani requests — ostáva oddelené.
+on_change = None
+_suspend_change = False
+
+
+def suspend_change(value: bool = True) -> None:
+    """Dočasne pozastaví on_change (napr. počas hromadného generovania)."""
+    global _suspend_change
+    _suspend_change = value
+
+
+def _fire_change() -> None:
+    if on_change and not _suspend_change:
+        try:
+            on_change()
+        except Exception:
+            pass
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS employees (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -120,7 +140,9 @@ def get_conn() -> sqlite3.Connection:
     return conn
 
 
-def init_db(seed: bool = True) -> None:
+def init_db(seed: bool = False) -> None:
+    """Vytvorí schému a predvolené sadzby. Ukážkové dáta sa NEvkladajú
+    automaticky (vkladajú sa len na požiadanie cez seed_sample_data)."""
     conn = get_conn()
     try:
         conn.executescript(SCHEMA)
@@ -135,6 +157,30 @@ def init_db(seed: bool = True) -> None:
         conn.commit()
         if seed and conn.execute("SELECT COUNT(*) FROM employees").fetchone()[0] == 0:
             _seed_sample_data(conn)
+    finally:
+        conn.close()
+
+
+def is_empty() -> bool:
+    """Sú v DB nejaké používateľské dáta (cesty/zamestnanci/viacdňové)?"""
+    conn = get_conn()
+    try:
+        for t in ("trips", "business_trips", "employees"):
+            if conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] > 0:
+                return False
+        return True
+    finally:
+        conn.close()
+
+
+def seed_sample_data() -> bool:
+    """Vloží ukážkové dáta, ak je DB prázdna. Vráti True ak vložila."""
+    conn = get_conn()
+    try:
+        if conn.execute("SELECT COUNT(*) FROM employees").fetchone()[0] == 0:
+            _seed_sample_data(conn)
+            return True
+        return False
     finally:
         conn.close()
 
@@ -171,9 +217,11 @@ def insert(table: str, data: dict) -> int:
         cur = conn.execute(f"INSERT INTO {table} ({cols}) VALUES ({ph})",
                            tuple(data.values()))
         conn.commit()
-        return cur.lastrowid
+        rowid = cur.lastrowid
     finally:
         conn.close()
+    _fire_change()
+    return rowid
 
 
 def update(table: str, row_id: int, data: dict) -> None:
@@ -185,6 +233,7 @@ def update(table: str, row_id: int, data: dict) -> None:
         conn.commit()
     finally:
         conn.close()
+    _fire_change()
 
 
 def delete(table: str, row_id: int) -> None:
@@ -194,6 +243,7 @@ def delete(table: str, row_id: int) -> None:
         conn.commit()
     finally:
         conn.close()
+    _fire_change()
 
 
 def query(sql: str, params: tuple = ()) -> list[dict]:
@@ -227,6 +277,7 @@ def set_config(kluc: str, hodnota) -> None:
         conn.commit()
     finally:
         conn.close()
+    _fire_change()
 
 
 # ------------------------------------------------------- záloha / obnova ---
@@ -239,8 +290,12 @@ def export_db_json() -> str:
     return json.dumps(dump, ensure_ascii=False, indent=2)
 
 
-def import_db_json(json_str: str) -> None:
-    """Obnoví DB zo zálohy (prepíše existujúce dáta)."""
+def import_db_json(json_str: str, fire: bool = True) -> None:
+    """Obnoví DB zo zálohy (prepíše existujúce dáta).
+
+    fire=False pri automatickom načítaní z cloudu, aby sa hneď nespustila
+    spätná záloha toho istého obsahu.
+    """
     data = json.loads(json_str)
     conn = get_conn()
     try:
@@ -257,6 +312,8 @@ def import_db_json(json_str: str) -> None:
         conn.commit()
     finally:
         conn.close()
+    if fire:
+        _fire_change()
 
 
 # ------------------------------------------------------- ukážkové dáta -----

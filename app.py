@@ -6,11 +6,13 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from core import db
+from core import cloud_sync, db
 
 st.set_page_config(page_title="MojeCestaky-Lite", page_icon="🚗", layout="wide")
 
 db.init_db()
+# Cloud perzistencia: zaregistruje auto-zálohu a raz za session načíta dáta.
+cloud_sync.init_on_start()
 
 pages = st.navigation([
     st.Page("pages/prehlad.py", title="Prehľad", icon="📊", default=True),
@@ -26,10 +28,12 @@ pages = st.navigation([
 ])
 
 with st.sidebar:
-    st.caption(
-        "⚠️ **Streamlit Cloud (free):** úložisko je dočasné — dáta sa môžu "
-        "pri reštarte appky resetovať. Pravidelne si robte zálohu cez "
-        "**Nastavenia → Záloha dát (JSON)**."
-    )
+    st.caption(cloud_sync.status_text())
+    if not cloud_sync.enabled():
+        st.caption(
+            "⚠️ **Streamlit Cloud (free):** úložisko je dočasné — dáta sa môžu "
+            "pri reštarte appky resetovať. Zapnite cloud sync (Nastavenia → "
+            "Cloud sync) alebo si robte zálohu cez **Nastavenia → Záloha dát**."
+        )
 
 pages.run()

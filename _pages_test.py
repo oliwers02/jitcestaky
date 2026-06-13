@@ -9,6 +9,7 @@ from streamlit.testing.v1 import AppTest  # noqa: E402
 from core import db  # noqa: E402
 
 db.init_db()
+db.seed_sample_data()
 
 PAGES = ["prehlad", "cesty", "viacdnove", "generator", "vozidla",
          "zamestnanci", "miesta", "export", "reporty", "nastavenia"]

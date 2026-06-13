@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from core import calc, db, exporters, holidays_sk  # noqa: E402
 
 db.init_db()
+db.seed_sample_data()  # ukážkové dáta sa už nevkladajú automaticky
 
 # --- sadzby ---
 r = calc.get_rates("2026-05-12")
