@@ -269,10 +269,19 @@ class _PDF(FPDF):
         self.cell(0, 7, self.t(text), new_x="LMARGIN", new_y="NEXT")
 
     def kv(self, k: str, v: str):
+        col = 58  # šírka stĺpca pre popis (mm)
+        label = self.t(k)
         self.set_font(self.family, "B", 9.5)
-        self.cell(58, 6, self.t(k), border=0)
-        self.set_font(self.family, "", 9.5)
-        self.multi_cell(0, 6, self.t(v), new_x="LMARGIN", new_y="NEXT")
+        if self.get_string_width(label) > col - 2:
+            # dlhý popis -> na samostatnom riadku, hodnota odsadená pod ním
+            self.cell(0, 6, label, new_x="LMARGIN", new_y="NEXT")
+            self.set_font(self.family, "", 9.5)
+            self.set_x(self.l_margin + col)
+            self.multi_cell(0, 6, self.t(v), new_x="LMARGIN", new_y="NEXT")
+        else:
+            self.cell(col, 6, label, border=0)
+            self.set_font(self.family, "", 9.5)
+            self.multi_cell(0, 6, self.t(v), new_x="LMARGIN", new_y="NEXT")
 
     def table(self, headers: list[str], rows: list[list], widths: list[float]):
         self.set_font(self.family, "B", 8.5)
