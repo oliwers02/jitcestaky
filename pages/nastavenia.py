@@ -103,17 +103,20 @@ with tab_diety:
 
 # ---------------------------------------------------------------- profil ----
 with tab_profil:
-    st.caption("Údaje sa použijú v hlavičke PDF dokumentov (cestovný príkaz, "
-               "vyúčtovanie).")
+    st.caption("Údaje sa použijú v **hlavičke PDF** dokumentov (cestovný príkaz, "
+               "vyúčtovanie). Zadajte **sídlo firmy** — nie bydlisko zamestnanca "
+               "(to sa eviduje pri zamestnancovi).")
     profil = ui.get_profil()
     c1, c2 = st.columns(2)
     with c1:
-        nazov = st.text_input("Meno / názov firmy", profil.get("nazov", ""))
-        adresa = st.text_input("Adresa / bydlisko", profil.get("adresa", ""))
+        nazov = st.text_input("Názov firmy", profil.get("nazov", ""))
+        adresa = st.text_input("Sídlo (adresa firmy)", profil.get("adresa", ""),
+                               help="Napr. Karpatské námestie 7770/10A, "
+                                    "831 06 Bratislava")
     with c2:
         ico = st.text_input("IČO", profil.get("ico", ""))
         dic = st.text_input("DIČ", profil.get("dic", ""))
-        icdph = st.text_input("IČ DPH", profil.get("icdph", ""))
+        icdph = st.text_input("IČ DPH (ak ste platiteľ DPH)", profil.get("icdph", ""))
     if st.button("💾 Uložiť údaje", type="primary"):
         db.set_config("profil", {"nazov": nazov, "adresa": adresa,
                                  "ico": ico, "dic": dic, "icdph": icdph})
