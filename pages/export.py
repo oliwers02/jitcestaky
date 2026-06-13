@@ -139,3 +139,68 @@ e4.download_button(
 st.caption("CSV je pripravené na import do účtovného softvéru (MRP, Money S3, "
            "Pohoda) — oddeľovač ';' a kódovanie Windows-1250 sú predvolené pre "
            "SK programy. XML obsahuje štruktúru <cestovne_prikazy><cesta>…")
+
+# ----------------------------------- hromadné PDF (príkazy + vyúčtovania) ----
+st.divider()
+st.subheader("🗜️ Hromadné PDF príkazy a vyúčtovania (ZIP)")
+st.caption("Vyber cesty, typy dokumentov a stiahni všetky podpísané PDF naraz "
+           "v jednom ZIP archíve.")
+
+emps_full = {e["id"]: e for e in db.fetch_all("employees")}
+
+
+def _trip_label(t):
+    return (f"{t['datum']} • {t.get('miesto_zaciatku') or ''} → "
+            f"{t.get('ciel_cesty') or ''}").strip(" •→")
+
+
+def _bt_label(b):
+    return f"{b['datum_zaciatku']}–{b['datum_konca']} • {b.get('nazov') or 'cesta'}"
+
+
+sel_trips = st.multiselect("Jednodňové cesty", trips, default=trips,
+                           format_func=_trip_label) if trips else []
+sel_bts = st.multiselect("Viacdňové cesty", bts, default=bts,
+                         format_func=_bt_label) if bts else []
+
+d1, d2 = st.columns(2)
+chk_prikaz = d1.checkbox("Zahrnúť cestovné príkazy", value=True)
+chk_vyuct = d2.checkbox("Zahrnúť vyúčtovania", value=True)
+
+if st.button("📦 Pripraviť ZIP", type="primary",
+             disabled=not (sel_trips or sel_bts) or not (chk_prikaz or chk_vyuct)):
+    items: list[tuple[str, bytes]] = []
+    for t in sel_trips:
+        zam = emps_full.get(t["employee_id"], {})
+        v = vehs.get(t["vehicle_id"])
+        vstr = ui.vozidlo_label(v) if v else "verejná doprava"
+        zslug = exporters._slug(zam.get("meno_priezvisko", "")[:20] or "zam")
+        base = f"{t['datum']}_{exporters._slug(t.get('ciel_cesty') or 'cesta')}_{zslug}"
+        if chk_prikaz:
+            items.append((f"jednodnove/prikaz_{base}.pdf",
+                          exporters.pdf_prikaz_jednodnova(t, zam, profil, vstr)))
+        if chk_vyuct:
+            items.append((f"jednodnove/vyuctovanie_{base}.pdf",
+                          exporters.pdf_vyuctovanie_jednodnova(t, zam, profil, vstr)))
+    for b in sel_bts:
+        zam = emps_full.get(b["employee_id"], {})
+        dni = db.fetch_all("business_trip_days", "business_trip_id = ?",
+                           (b["id"],), order="datum")
+        s = calc.suhrn_viacdnovej(b, dni)
+        base = f"{b['datum_zaciatku']}_{exporters._slug(b.get('nazov') or 'cesta')}"
+        if chk_prikaz:
+            items.append((f"viacdnove/prikaz_{base}.pdf",
+                          exporters.pdf_cestovny_prikaz(b, zam, profil)))
+        if chk_vyuct:
+            items.append((f"viacdnove/vyuctovanie_{base}.pdf",
+                          exporters.pdf_vyuctovanie(b, zam, profil, dni, s)))
+    st.session_state["bulk_zip"] = exporters.build_zip(items)
+    st.session_state["bulk_zip_name"] = f"prikazy_vyuctovania_{obdobie}.zip"
+    st.session_state["bulk_zip_count"] = len(items)
+
+if st.session_state.get("bulk_zip"):
+    st.success(f"Pripravených {st.session_state['bulk_zip_count']} PDF dokumentov.")
+    st.download_button(
+        "⬇️ Stiahnuť ZIP", st.session_state["bulk_zip"],
+        file_name=st.session_state["bulk_zip_name"],
+        mime="application/zip", type="primary", width="stretch")

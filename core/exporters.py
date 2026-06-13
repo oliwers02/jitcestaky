@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import datetime as dt
 import io
+import re
 import unicodedata
 import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 import pandas as pd
@@ -488,3 +490,96 @@ def pdf_prehlad(trips_df: pd.DataFrame, diety_df: pd.DataFrame,
         pdf.table(["Deň", "Cesta", "Krajina", "Pásmo", "Hodiny", "Stravné"],
                   rows, [22, 50, 20, 30, 18, 36])
     return bytes(pdf.output())
+
+
+# ------------------------------------------- PDF jednodňových ciest ---------
+
+def pdf_prikaz_jednodnova(trip: dict, zamestnanec: dict, profil: dict,
+                          vozidlo_str: str = "") -> bytes:
+    """PDF „Cestovný príkaz" pre jednodňovú cestu."""
+    pdf = _PDF()
+    pdf.add_page()
+    _hlavicka(pdf, profil)
+    pdf.h1("CESTOVNÝ PRÍKAZ")
+    pdf.set_font(pdf.family, "", 9)
+    pdf.cell(0, 5, pdf.t("jednodňová cesta — podľa zákona č. 283/2002 Z. z."),
+             new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.ln(4)
+    pdf.kv("Zamestnanec:", zamestnanec.get("meno_priezvisko", ""))
+    pdf.kv("Pozícia:", zamestnanec.get("pozicia") or "—")
+    pdf.kv("Bydlisko (nástup):", zamestnanec.get("adresa_bydliska") or "—")
+    pdf.ln(2)
+    pdf.kv("Dátum cesty:", _format_datum(trip.get("datum")))
+    pdf.kv("Čas:", f"{trip.get('cas_odchodu') or '—'} – {trip.get('cas_prichodu') or '—'}")
+    pdf.kv("Trasa:", f"{trip.get('miesto_zaciatku') or ''} – {trip.get('ciel_cesty') or ''}")
+    pdf.kv("Účel cesty:", trip.get("ucel_cesty") or "—")
+    pdf.kv("Miesto/krajina:", calc.KRAJINY.get(trip.get("cielova_krajina", "SK"),
+                                               trip.get("cielova_krajina", "SK")))
+    doprava = "súkromné cestné motorové vozidlo" \
+        if trip.get("typ_dopravy") == "sukromne_auto" else "verejná doprava"
+    pdf.kv("Spôsob dopravy:", doprava + (f" ({vozidlo_str})" if vozidlo_str else ""))
+    pdf.ln(3)
+    suhlas = "ÁNO" if trip.get("suhlas_zamestnanca") else "NIE"
+    pdf.kv("Súhlas zamestnanca s vyslaním (§3):", suhlas)
+    _podpisy(pdf, datum=trip.get("datum"))
+    return bytes(pdf.output())
+
+
+def pdf_vyuctovanie_jednodnova(trip: dict, zamestnanec: dict, profil: dict,
+                               vozidlo_str: str = "") -> bytes:
+    """PDF „Vyúčtovanie pracovnej cesty" pre jednodňovú cestu."""
+    pdf = _PDF()
+    pdf.add_page()
+    _hlavicka(pdf, profil)
+    pdf.h1("VYÚČTOVANIE PRACOVNEJ CESTY")
+    pdf.set_font(pdf.family, "", 9)
+    pdf.cell(0, 5, pdf.t("jednodňová cesta"), new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.ln(3)
+    pdf.kv("Zamestnanec:", zamestnanec.get("meno_priezvisko", ""))
+    pdf.kv("Dátum cesty:", _format_datum(trip.get("datum")))
+    pdf.kv("Čas:", f"{trip.get('cas_odchodu') or '—'} – {trip.get('cas_prichodu') or '—'}")
+    pdf.kv("Trasa:", f"{trip.get('miesto_zaciatku') or ''} – {trip.get('ciel_cesty') or ''}")
+    pdf.kv("Účel cesty:", trip.get("ucel_cesty") or "—")
+    if vozidlo_str:
+        pdf.kv("Vozidlo:", vozidlo_str)
+    pdf.ln(2)
+
+    hod = calc.hodiny_trvania(trip.get("cas_odchodu"), trip.get("cas_prichodu"))
+    krajina = trip.get("cielova_krajina", "SK") if trip.get("zahranicna") else "SK"
+    _, mena_str, pasmo = calc.stravne_pre_hodiny(
+        hod, krajina, calc.get_rates(trip.get("datum")))
+    mena = trip.get("stravne_mena") or mena_str
+    km = float(trip.get("vzdialenost_km") or 0)
+
+    pdf.h2("Rekapitulácia náhrad")
+    rk = [
+        ["Vzdialenosť (tam a späť)", f"{km:.1f} km"],
+        ["PHM náhrada", f"{float(trip.get('vypocitana_phm_nahrada') or 0):.2f} EUR"],
+        ["Základná náhrada za km", f"{float(trip.get('vypocitana_zakladna_nahrada') or 0):.2f} EUR"],
+        [f"Stravné ({pasmo}, {hod:.1f} h)",
+         f"{float(trip.get('vypocitane_stravne') or 0):.2f} {mena}"],
+        ["Vedľajšie výdavky", f"{float(trip.get('vedlajsie_vydavky_eur') or 0):.2f} EUR"],
+    ]
+    if float(trip.get("vypocitane_vreckove") or 0) > 0:
+        rk.append(["Vreckové", f"{float(trip.get('vypocitane_vreckove') or 0):.2f} {mena}"])
+    rk.append(["SPOLU", f"{float(trip.get('nahrada_spolu') or 0):.2f} EUR"])
+    pdf.table(["Položka", "Suma"], rk, [110, 64])
+    _podpisy(pdf, datum=trip.get("datum"))
+    return bytes(pdf.output())
+
+
+# --------------------------------------------------- ZIP balíček PDF --------
+
+def _slug(text: str, maxlen: int = 40) -> str:
+    s = _ascii_fallback(text).strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+    return (s[:maxlen] or "cesta")
+
+
+def build_zip(items: list[tuple[str, bytes]]) -> bytes:
+    """Zabalí (nazov_suboru, obsah) položky do ZIP archívu."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, data in items:
+            z.writestr(name, data)
+    return buf.getvalue()
