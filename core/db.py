@@ -126,10 +126,18 @@ CREATE TABLE IF NOT EXISTS app_config (
     kluc TEXT PRIMARY KEY,
     hodnota TEXT
 );
+CREATE TABLE IF NOT EXISTS payouts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    employee_id INTEGER REFERENCES employees(id),
+    datum TEXT NOT NULL,
+    suma_eur REAL DEFAULT 0,
+    poznamka TEXT
+);
 """
 
 TABLES = ["employees", "vehicles", "locations", "trips",
-          "business_trips", "business_trip_days", "settings", "app_config"]
+          "business_trips", "business_trip_days", "settings", "app_config",
+          "payouts"]
 
 
 def get_conn() -> sqlite3.Connection:
