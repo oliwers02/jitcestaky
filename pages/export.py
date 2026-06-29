@@ -204,3 +204,53 @@ if st.session_state.get("bulk_zip"):
         "⬇️ Stiahnuť ZIP", st.session_state["bulk_zip"],
         file_name=st.session_state["bulk_zip_name"],
         mime="application/zip", type="primary", width="stretch")
+
+# --------------------------------- XLSX iba nevyplatených ciest --------------
+st.divider()
+st.subheader("💶 Export nevyplatených ciest (XLSX)")
+st.caption("Vyexportuje iba cesty, ktoré ti ešte neboli vyplatené — podľa "
+           "evidencie výplat (Reporty → Vyplácanie náhrad). Predpokladá sa "
+           "úhrada od najstarších ciest. Berie do úvahy **všetky** cesty, nie "
+           "len zvolené obdobie hore.")
+
+all_trips_u = db.fetch_all("trips", order="datum")
+all_bts_u = db.fetch_all("business_trips", order="datum_zaciatku")
+uhradene = sum(float(p["suma_eur"] or 0) for p in db.fetch_all("payouts"))
+stav = calc.rozdel_uhradene(all_trips_u, all_bts_u, uhradene)
+
+unpaid_trip_ids = set(stav["nevyplatene_trip_ids"])
+unpaid_bt_ids = set(stav["nevyplatene_bt_ids"])
+unpaid_trips = [t for t in all_trips_u if t["id"] in unpaid_trip_ids]
+unpaid_bts = [b for b in all_bts_u if b["id"] in unpaid_bt_ids]
+for t in unpaid_trips:
+    t["zamestnanec"] = emps.get(t["employee_id"], {}).get("meno_priezvisko", "")
+    v = vehs.get(t["vehicle_id"])
+    t["vozidlo"] = ui.vozidlo_label(v) if v else "verejná doprava"
+for b in unpaid_bts:
+    b["zamestnanec"] = emps.get(b["employee_id"], {}).get("meno_priezvisko", "")
+
+m1, m2, m3 = st.columns(3)
+m1.metric("Nevyplatené cesty", f"{len(unpaid_trips)} + {len(unpaid_bts)} viacdňových")
+m2.metric("Už vyplatené", ui.eur(uhradene))
+m3.metric("Nevyplatené spolu", ui.eur(stav["nevyplatene_suma"]))
+
+if not unpaid_trips and not unpaid_bts:
+    st.success("Všetky cesty sú vyplatené. ✅")
+else:
+    u_trips_df = exporters.trips_to_df(unpaid_trips, stav["covered_days"])
+    u_diety_df = exporters.diety_to_df(unpaid_bts)
+    u_suhrn = {
+        "Obsah": "Iba NEVYPLATENÉ cesty",
+        "Počet jednodňových ciest": len(unpaid_trips),
+        "Počet viacdňových ciest": len(unpaid_bts),
+        "Už vyplatené (EUR)": round(uhradene, 2),
+        "NEVYPLATENÉ SPOLU (EUR)": stav["nevyplatene_suma"],
+        "Vygenerované": dt.date.today().isoformat(),
+    }
+    st.dataframe(u_trips_df, hide_index=True, width="stretch") if not u_trips_df.empty else None
+    st.download_button(
+        "📊 Stiahnuť XLSX (nevyplatené)",
+        exporters.export_xlsx(u_trips_df, u_diety_df, u_suhrn),
+        file_name=f"nevyplatene_cesty_{dt.date.today().isoformat()}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary", width="stretch")

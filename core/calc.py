@@ -361,6 +361,62 @@ def compute_totals(trips: list[dict], business_trips: list[dict]) -> dict:
     }
 
 
+def rozdel_uhradene(trips: list[dict], business_trips: list[dict],
+                    uhradene_spolu: float) -> dict:
+    """Rozdelí cesty na vyplatené / nevyplatené podľa výšky úhrad (FIFO).
+
+    Keďže výplaty sa evidujú ako celkové sumy (nie po jednotlivých cestách),
+    predpokladá sa, že úhrady pokrývajú cesty od **najstarších**. Cesta, na
+    ktorú už úhrada nestačí, je „nevyplatená" (prípadne „čiastočne").
+    """
+    from core import db
+    cov = covered_days(business_trips)
+    items = []
+    for t in trips:
+        v_multi = (t.get("employee_id"), str(t.get("datum"))) in cov
+        stravne = 0.0 if v_multi else _trip_stravne_eur(t)
+        spolu = round(float(t.get("vypocitana_phm_nahrada") or 0)
+                      + float(t.get("vypocitana_zakladna_nahrada") or 0)
+                      + float(t.get("vedlajsie_vydavky_eur") or 0) + stravne, 2)
+        items.append({"typ": "trip", "id": t["id"],
+                      "datum": str(t.get("datum")), "spolu": spolu})
+    for b in business_trips:
+        dni = db.fetch_all("business_trip_days", "business_trip_id = ?",
+                           (b["id"],), order="datum")
+        s = suhrn_viacdnovej(b, dni)
+        spolu = round(float(b.get("kilometrovne_eur") or 0)
+                      + (s["stravne_eur"] or 0.0)
+                      + float(b.get("ubytovanie_eur") or 0)
+                      + float(b.get("navstevy_rodiny_eur") or 0), 2)
+        items.append({"typ": "bt", "id": b["id"],
+                      "datum": str(b.get("datum_zaciatku")), "spolu": spolu})
+
+    items.sort(key=lambda x: (x["datum"], x["typ"], x["id"]))
+    zostatok = round(float(uhradene_spolu or 0), 2)
+    nevyplatene_trip, nevyplatene_bt = [], []
+    nevyplatene_suma = 0.0
+    for it in items:
+        if zostatok >= it["spolu"] - 0.005:
+            zostatok = round(zostatok - it["spolu"], 2)
+            it["stav"], it["nevyplatene"] = "vyplatená", 0.0
+        elif zostatok > 0.005:
+            it["nevyplatene"] = round(it["spolu"] - zostatok, 2)
+            it["stav"], zostatok = "čiastočne", 0.0
+        else:
+            it["nevyplatene"], it["stav"] = it["spolu"], "nevyplatená"
+        if it["stav"] != "vyplatená":
+            (nevyplatene_trip if it["typ"] == "trip"
+             else nevyplatene_bt).append(it["id"])
+            nevyplatene_suma += it["nevyplatene"]
+    return {
+        "items": items,
+        "nevyplatene_trip_ids": nevyplatene_trip,
+        "nevyplatene_bt_ids": nevyplatene_bt,
+        "nevyplatene_suma": round(nevyplatene_suma, 2),
+        "covered_days": cov,
+    }
+
+
 # ------------------------------------------------------------- haversine ----
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
